@@ -1,0 +1,189 @@
+package editor
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	cursorStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("7")).
+			Foreground(lipgloss.Color("0"))
+
+	selectionStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("4")).
+			Foreground(lipgloss.Color("15"))
+
+	lineNumberStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")).
+			Width(4).
+			Align(lipgloss.Right)
+)
+
+// View renders the editor.
+func (m *Model) View() string {
+	lines := m.buffer.Lines()
+	var sb strings.Builder
+
+	// Calculate visible range
+	startLine := m.scrollOffset
+	endLine := startLine + m.pageSize
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+
+	// Get cursor position
+	cursorLine, cursorCol := m.cursor.LineCol()
+
+	// Get selection if any
+	sel := m.selection.GetSelection()
+	var selStart, selEnd int
+	if sel != nil {
+		selStart = sel.Start
+		selEnd = sel.End
+	}
+
+	// Render visible lines
+	for lineNum := startLine; lineNum < endLine; lineNum++ {
+		line := ""
+		if lineNum < len(lines) {
+			line = lines[lineNum]
+		}
+
+		// Line number
+		lineNumStr := lineNumberStyle.Render(fmt.Sprintf("%d", lineNum+1))
+		sb.WriteString(lineNumStr)
+		sb.WriteString(" ")
+
+		// Line content with cursor and selection
+		lineStart := m.buffer.LineStart(lineNum)
+		runes := []rune(line)
+
+		for col := 0; col <= len(runes); col++ {
+			pos := lineStart + col
+			isCursor := lineNum == cursorLine && col == cursorCol
+
+			// Check if position is in selection
+			inSelection := sel != nil && pos >= selStart && pos < selEnd
+
+			if col < len(runes) {
+				char := string(runes[col])
+				if isCursor {
+					sb.WriteString(cursorStyle.Render(char))
+				} else if inSelection {
+					sb.WriteString(selectionStyle.Render(char))
+				} else {
+					sb.WriteString(char)
+				}
+			} else if isCursor {
+				// Cursor at end of line
+				sb.WriteString(cursorStyle.Render(" "))
+			}
+		}
+
+		sb.WriteString("\n")
+	}
+
+	// Pad remaining lines
+	for lineNum := endLine; lineNum < startLine+m.pageSize; lineNum++ {
+		lineNumStr := lineNumberStyle.Render("~")
+		sb.WriteString(lineNumStr)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// ViewFocus renders the editor without line numbers or tilde markers (for focus mode).
+func (m *Model) ViewFocus() string {
+	lines := m.buffer.Lines()
+	var sb strings.Builder
+
+	startLine := m.scrollOffset
+	endLine := startLine + m.pageSize
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+
+	cursorLine, cursorCol := m.cursor.LineCol()
+	sel := m.selection.GetSelection()
+	var selStart, selEnd int
+	if sel != nil {
+		selStart = sel.Start
+		selEnd = sel.End
+	}
+
+	for lineNum := startLine; lineNum < endLine; lineNum++ {
+		line := ""
+		if lineNum < len(lines) {
+			line = lines[lineNum]
+		}
+
+		lineStart := m.buffer.LineStart(lineNum)
+		runes := []rune(line)
+
+		for col := 0; col <= len(runes); col++ {
+			pos := lineStart + col
+			isCursor := lineNum == cursorLine && col == cursorCol
+			inSelection := sel != nil && pos >= selStart && pos < selEnd
+
+			if col < len(runes) {
+				char := string(runes[col])
+				if isCursor {
+					sb.WriteString(cursorStyle.Render(char))
+				} else if inSelection {
+					sb.WriteString(selectionStyle.Render(char))
+				} else {
+					sb.WriteString(char)
+				}
+			} else if isCursor {
+				sb.WriteString(cursorStyle.Render(" "))
+			}
+		}
+
+		sb.WriteString("\n")
+	}
+
+	// Pad remaining lines with blank lines (no ~ markers)
+	remaining := (startLine + m.pageSize) - endLine
+	for i := 0; i < remaining; i++ {
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// StatusBar renders the status bar.
+func (m *Model) StatusBar() string {
+	// Left side: filename and modified indicator
+	filename := m.filepath
+	if filename == "" {
+		filename = "[No Name]"
+	}
+	if m.modified {
+		filename += " [+]"
+	}
+
+	// Right side: cursor position
+	line, col := m.cursor.LineCol()
+	position := fmt.Sprintf("Ln %d, Col %d", line+1, col+1)
+
+	// Calculate spacing
+	leftLen := len(filename)
+	rightLen := len(position)
+	spaces := m.width - leftLen - rightLen
+	if spaces < 1 {
+		spaces = 1
+	}
+
+	statusStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("7")).
+		Foreground(lipgloss.Color("0")).
+		Width(m.width)
+
+	status := filename + strings.Repeat(" ", spaces) + position
+
+	return statusStyle.Render(status)
+}
