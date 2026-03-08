@@ -24,6 +24,7 @@ const (
 	fieldModel
 	fieldSystemPrompt
 	fieldBgColor
+	fieldGlamourStyle
 	numFields
 )
 
@@ -34,6 +35,7 @@ var fieldLabels = [numFields]string{
 	"Model",
 	"System Prompt",
 	"Background Color",
+	"Preview Theme",
 }
 
 // Model is the settings panel state.
@@ -63,6 +65,10 @@ func New(cfg config.Config, width, height int) *Model {
 	m.values[fieldModel] = []rune(cfg.AI.Model)
 	m.values[fieldSystemPrompt] = []rune(cfg.AI.SystemPrompt)
 	m.values[fieldBgColor] = []rune(cfg.BackgroundColor)
+	m.values[fieldGlamourStyle] = []rune(cfg.GlamourStyle)
+	if string(m.values[fieldGlamourStyle]) == "" {
+		m.values[fieldGlamourStyle] = []rune("dark")
+	}
 
 	for i := range m.cursors {
 		m.cursors[i] = len(m.values[i])
@@ -197,6 +203,7 @@ func (m *Model) buildSaveCmd() tea.Cmd {
 	cfg.AI.Model = string(m.values[fieldModel])
 	cfg.AI.SystemPrompt = string(m.values[fieldSystemPrompt])
 	cfg.BackgroundColor = string(m.values[fieldBgColor])
+	cfg.GlamourStyle = string(m.values[fieldGlamourStyle])
 	return func() tea.Msg {
 		return SaveMsg{Config: cfg}
 	}
@@ -278,6 +285,15 @@ func (m *Model) View() string {
 			}
 			lines = append(lines, fieldStyle.Render(fieldContent))
 			lines = append(lines, hintStyle.Render("  e.g. 0, 235, #1a1a2e — empty = terminal default"))
+		} else if i == fieldGlamourStyle {
+			var fieldStyle lipgloss.Style
+			if i == m.focused {
+				fieldStyle = focusedBorderStyle
+			} else {
+				fieldStyle = normalBorderStyle
+			}
+			lines = append(lines, fieldStyle.Render(fieldContent))
+			lines = append(lines, hintStyle.Render("  dark, light, dracula, tokyo-night, notty, ..."))
 		} else {
 			// Single-line field
 			var fieldStyle lipgloss.Style

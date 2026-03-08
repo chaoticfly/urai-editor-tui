@@ -7,6 +7,22 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// formatCount formats an integer with thousands separators (e.g. 1247 → "1,247").
+func formatCount(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	for i, ch := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(ch)
+	}
+	return b.String()
+}
+
 // StatusBar renders a minimal status bar.
 type StatusBar struct {
 	Width int
@@ -30,12 +46,13 @@ func (s *StatusBar) SetWidth(width int) {
 
 // StatusInfo contains information to display in the status bar.
 type StatusInfo struct {
-	Filename string
-	Modified bool
-	Line     int
-	Col      int
-	ViewMode ViewMode
-	Message  string // Optional message (e.g., "Saved", error messages)
+	Filename  string
+	Modified  bool
+	Line      int
+	Col       int
+	WordCount int
+	ViewMode  ViewMode
+	Message   string // Optional message (e.g., "Saved", error messages)
 }
 
 // Render renders the status bar.
@@ -52,8 +69,8 @@ func (s *StatusBar) Render(info StatusInfo) string {
 	// Center section: view mode
 	viewMode := ViewModeName(info.ViewMode)
 
-	// Right section: cursor position
-	position := fmt.Sprintf("Ln %d, Col %d", info.Line+1, info.Col+1)
+	// Right section: word count + cursor position
+	position := fmt.Sprintf("%sw  Ln %d, Col %d", formatCount(info.WordCount), info.Line+1, info.Col+1)
 
 	// Message takes precedence over center section
 	center := viewMode

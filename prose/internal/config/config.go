@@ -24,6 +24,7 @@ type Config struct {
 	AutoSave        bool     `json:"auto_save"`
 	AutoSaveDelay   int      `json:"auto_save_delay_ms"`
 	BackgroundColor string   `json:"background_color"`
+	GlamourStyle    string   `json:"glamour_style"`
 	AI              AIConfig `json:"ai"`
 }
 
@@ -36,6 +37,7 @@ func DefaultConfig() *Config {
 		Theme:          "auto",
 		AutoSave:       false,
 		AutoSaveDelay:  5000,
+		GlamourStyle:   "dark",
 		AI: AIConfig{
 			Provider:     "ollama",
 			BaseURL:      "http://localhost:11434",

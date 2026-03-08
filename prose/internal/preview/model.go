@@ -2,36 +2,41 @@ package preview
 
 import (
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 )
 
-// debounceInterval is the time to wait before re-rendering.
-const debounceInterval = 100 * time.Millisecond
+// RenderedMsg is sent when async rendering completes.
+type RenderedMsg struct {
+	content  string
+	rendered string
+	width    int
+}
 
 // Model represents the preview pane state.
 type Model struct {
-	renderer      *Renderer
+	style         string // glamour style name, e.g. "dark" or "light"
 	content       string
 	rendered      string
+	renderedFor   string // content the current rendered output corresponds to
+	renderedWidth int    // width at which it was rendered
 	width         int
 	height        int
 	scrollOffset  int
-	needsRender   bool
-	lastContent   string
-	debounceTimer *time.Timer
 }
 
-// New creates a new preview model.
-func New(width, height int) *Model {
-	renderer, _ := NewRenderer(width)
+// New creates a new preview model. style should be a glamour style name
+// ("dark", "light", "dracula", etc.) and must be determined before the
+// BubbleTea program starts so goroutines never query the terminal themselves.
+func New(width, height int, style string) *Model {
+	if style == "" {
+		style = "dark"
+	}
 	return &Model{
-		renderer:     renderer,
-		width:        width,
-		height:       height,
-		scrollOffset: 0,
-		needsRender:  false,
+		style:  style,
+		width:  width,
+		height: height,
 	}
 }
 
@@ -40,84 +45,93 @@ func (m *Model) Init() tea.Cmd {
 	return nil
 }
 
-// renderMsg signals that content should be re-rendered.
-type renderMsg struct{}
-
 // Update handles messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		if m.renderer != nil {
-			m.renderer.SetWidth(m.width)
-		}
-		m.needsRender = true
 		return m, nil
 
-	case renderMsg:
-		m.doRender()
+	case RenderedMsg:
+		// Discard stale results if content or width changed while rendering.
+		if msg.content == m.content && msg.width == m.width {
+			m.rendered = msg.rendered
+			m.renderedFor = msg.content
+			m.renderedWidth = msg.width
+		}
 		return m, nil
 	}
 
 	return m, nil
 }
 
-// SetContent sets the markdown content to preview.
+// SetContent schedules an async render if content or width changed.
+// Returns nil if the cached output is already up to date.
 func (m *Model) SetContent(content string) tea.Cmd {
-	if content == m.lastContent {
+	m.content = content
+	if content == m.renderedFor && m.width == m.renderedWidth {
 		return nil
 	}
-
-	m.content = content
-	m.lastContent = content
-	m.needsRender = true
-
-	// Return a command that will trigger rendering after debounce
-	return func() tea.Msg {
-		time.Sleep(debounceInterval)
-		return renderMsg{}
-	}
+	return m.renderAsync(content, m.width)
 }
 
-// SetContentImmediate sets content and renders immediately.
+// SetContentImmediate sets content and renders synchronously.
+// Skips rendering if the cache is already current.
 func (m *Model) SetContentImmediate(content string) {
 	m.content = content
-	m.lastContent = content
-	m.doRender()
+	if content == m.renderedFor && m.width == m.renderedWidth {
+		return
+	}
+	rendered := m.renderSync(content, m.width)
+	m.rendered = rendered
+	m.renderedFor = content
+	m.renderedWidth = m.width
 }
 
-// doRender performs the actual rendering.
-func (m *Model) doRender() {
-	if m.renderer == nil {
-		m.rendered = m.content
-		return
+// renderAsync returns a tea.Cmd that renders in a goroutine.
+// A fresh Glamour renderer is created inside the goroutine. The style is a
+// plain string (safe to capture) so no mutable state is shared with the main loop.
+func (m *Model) renderAsync(content string, width int) tea.Cmd {
+	style := m.style
+	return func() tea.Msg {
+		return RenderedMsg{
+			content:  content,
+			rendered: renderWithStyle(content, width, style),
+			width:    width,
+		}
 	}
+}
 
-	rendered, err := m.renderer.Render(m.content)
+func (m *Model) renderSync(content string, width int) string {
+	return renderWithStyle(content, width, m.style)
+}
+
+// renderWithStyle creates a one-shot Glamour renderer using a static style name.
+// Using WithStandardStyle (not WithAutoStyle) avoids terminal OSC queries,
+// which would corrupt output when called from goroutines during the program run.
+func renderWithStyle(content string, width int, style string) string {
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStandardStyle(style),
+		glamour.WithWordWrap(width),
+	)
 	if err != nil {
-		m.rendered = m.content
-		return
+		return content
 	}
-
-	m.rendered = rendered
-	m.needsRender = false
+	rendered, err := r.Render(content)
+	if err != nil {
+		return content
+	}
+	return rendered
 }
 
 // View renders the preview.
 func (m *Model) View() string {
-	if m.needsRender {
-		m.doRender()
-	}
-
 	lines := strings.Split(m.rendered, "\n")
 
-	// Apply scroll offset
 	if m.scrollOffset > 0 && m.scrollOffset < len(lines) {
 		lines = lines[m.scrollOffset:]
 	}
-
-	// Limit to height
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
@@ -144,14 +158,25 @@ func (m *Model) ScrollDown() {
 	}
 }
 
+// SetStyle changes the Glamour style and schedules a re-render.
+func (m *Model) SetStyle(style string) tea.Cmd {
+	if style == "" {
+		style = "dark"
+	}
+	if style == m.style {
+		return nil
+	}
+	m.style = style
+	// Invalidate cache so next render uses the new style.
+	m.renderedFor = ""
+	m.renderedWidth = 0
+	return m.SetContent(m.content)
+}
+
 // SetSize updates the preview dimensions.
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	if m.renderer != nil {
-		m.renderer.SetWidth(width)
-	}
-	m.needsRender = true
 }
 
 // Rendered returns the current rendered content.

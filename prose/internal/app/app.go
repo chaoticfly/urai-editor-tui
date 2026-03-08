@@ -13,6 +13,7 @@ import (
 	"urai/internal/editor"
 	"urai/internal/export"
 	"urai/internal/filebrowser"
+	"urai/internal/findbar"
 	"urai/internal/fountain"
 	"urai/internal/layout"
 	"urai/internal/preview"
@@ -22,12 +23,12 @@ import (
 
 // Model is the root application model.
 type Model struct {
-	editor      *editor.Model
-	preview     *preview.Model
-	aiPanel     *suggestions.Model
+	editor        *editor.Model
+	preview       *preview.Model
+	aiPanel       *suggestions.Model
 	settingsPanel *settings.Model
-	layout      *layout.SplitLayout
-	statusBar   *layout.StatusBar
+	layout        *layout.SplitLayout
+	statusBar     *layout.StatusBar
 
 	viewMode     layout.ViewMode
 	prevViewMode layout.ViewMode
@@ -36,14 +37,17 @@ type Model struct {
 	width  int
 	height int
 
-	message        string
-	showHelp       bool
-	showSettings   bool
+	message         string
+	showHelp        bool
+	showSettings    bool
 	showFileBrowser bool
-	fileBrowser    *filebrowser.Model
-	quitting       bool
-	isFountain     bool
-	fountainPopup  *fountain.Popup
+	fileBrowser     *filebrowser.Model
+	showFindBar     bool
+	findBar         *findbar.Model
+	quitting        bool
+	showExitConfirm bool
+	isFountain      bool
+	fountainPopup   *fountain.Popup
 }
 
 // New creates a new application model.
@@ -53,7 +57,7 @@ func New(fp string, cfg *config.Config) *Model {
 	}
 
 	ed := editor.New(fp)
-	prev := preview.New(80, 24)
+	prev := preview.New(80, 24, glamourStyleFromConfig(cfg))
 	split := layout.NewSplitLayout(80, 24)
 	status := layout.NewStatusBar(80)
 	aiP := suggestions.New(cfg.AI, 40, 24)
@@ -108,6 +112,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fileBrowser != nil {
 			m.fileBrowser.SetSize(m.width, m.height)
 		}
+		if m.findBar != nil {
+			m.findBar.SetWidth(m.width)
+		}
 
 		editorMsg := tea.WindowSizeMsg{
 			Width:  m.editorWidth(),
@@ -116,7 +123,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.Update(editorMsg)
 		m.preview.SetSize(m.previewWidth(), m.editorHeight())
 		m.aiPanel.SetSize(m.aiPanelWidth(), m.editorHeight())
-		return m, nil
+		return m, m.updatePreviewContent()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -139,12 +146,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		*m.config = msg.Config
 		m.aiPanel.UpdateConfig(msg.Config.AI)
 		m.showSettings = false
+		cmd := m.preview.SetStyle(msg.Config.GlamourStyle)
 		if err := m.config.Save(); err != nil {
 			m.message = fmt.Sprintf("Settings save error: %v", err)
 		} else {
 			m.message = "Settings saved"
 		}
-		return m, nil
+		return m, cmd
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
@@ -154,9 +162,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case filebrowser.OpenFileMsg:
-		m.openFile(msg.Path)
+		cmd := m.openFile(msg.Path)
 		m.showFileBrowser = false
-		return m, nil
+		return m, cmd
 
 	case filebrowser.SaveAsMsg:
 		m.editor.SetFilepath(msg.Path)
@@ -172,6 +180,40 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case filebrowser.CloseMsg:
 		m.showFileBrowser = false
 		return m, nil
+
+	case preview.RenderedMsg:
+		_, cmd := m.preview.Update(msg)
+		return m, cmd
+
+	case findbar.CloseMsg:
+		m.showFindBar = false
+		m.editor.ClearSearchState()
+		m.syncEditorDimensions()
+		return m, nil
+
+	case findbar.JumpMsg:
+		m.editor.JumpToPosition(msg.Pos)
+		m.editor.SetSearchState(m.findBar.Matches(), m.findBar.MatchLen(), m.findBar.CurrentMatch())
+		return m, nil
+
+	case findbar.ReplaceMsg:
+		m.editor.ReplaceAt(msg.Pos, msg.Len, msg.Replacement)
+		m.findBar.SetContent(m.editor.Content())
+		m.editor.SetSearchState(m.findBar.Matches(), m.findBar.MatchLen(), m.findBar.CurrentMatch())
+		if cmd := m.findBar.CurrentJumpCmd(); cmd != nil {
+			return m, cmd
+		}
+		return m, nil
+
+	case findbar.ReplaceAllMsg:
+		// Replace from end to start so earlier positions stay valid.
+		for i := len(msg.Matches) - 1; i >= 0; i-- {
+			m.editor.ReplaceAt(msg.Matches[i], msg.MatchLen, msg.Replacement)
+		}
+		m.findBar.SetContent(m.editor.Content())
+		m.editor.SetSearchState(m.findBar.Matches(), m.findBar.MatchLen(), m.findBar.CurrentMatch())
+		m.message = fmt.Sprintf("Replaced %d occurrence(s)", len(msg.Matches))
+		return m, nil
 	}
 
 	return m, nil
@@ -179,6 +221,31 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
+
+	// Exit confirmation dialog captures all input
+	if m.showExitConfirm {
+		switch key {
+		case "y", "Y":
+			m.quitting = true
+			return m, tea.Quit
+		case "ctrl+s":
+			if m.editor.Filepath() == "" {
+				m.showExitConfirm = false
+				m.message = "Save the file first (Ctrl+S), then quit"
+				return m, nil
+			}
+			if err := m.editor.Save(); err != nil {
+				m.showExitConfirm = false
+				m.message = fmt.Sprintf("Save failed: %v", err)
+				return m, nil
+			}
+			m.quitting = true
+			return m, tea.Quit
+		default:
+			m.showExitConfirm = false
+			return m, nil
+		}
+	}
 
 	// Settings modal captures all input
 	if m.showSettings {
@@ -191,6 +258,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.showFileBrowser {
 		updated, cmd := m.fileBrowser.Update(msg)
 		m.fileBrowser = updated
+		return m, cmd
+	}
+
+	// Find bar captures all input.
+	if m.showFindBar {
+		// Ctrl+H toggles to replace mode while bar is open.
+		if key == "ctrl+h" {
+			m.findBar.SetMode(findbar.ModeReplace)
+			m.syncEditorDimensions()
+			return m, nil
+		}
+		updated, cmd := m.findBar.Update(msg)
+		m.findBar = updated
 		return m, cmd
 	}
 
@@ -211,6 +291,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global keybindings
 	switch key {
 	case "ctrl+q":
+		if m.editor.Modified() {
+			m.showExitConfirm = true
+			return m, nil
+		}
 		m.quitting = true
 		return m, tea.Quit
 
@@ -219,11 +303,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewMode = layout.CycleViewMode(m.viewMode)
 			m.message = fmt.Sprintf("View: %s", layout.ViewModeName(m.viewMode))
 			m.syncEditorDimensions()
-			m.updatePreviewContent()
+			cmd := m.updatePreviewContent()
 			if m.viewMode == layout.ViewModeAI {
 				line, _ := m.editor.Cursor().LineCol()
 				m.aiPanel.SetEditorContext(m.editor.Content(), line)
 			}
+			return m, cmd
 		}
 		return m, nil
 
@@ -260,8 +345,22 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p":
 		return m.exportPDF()
 
-	case "ctrl+?", "ctrl+h":
+	case "ctrl+?", "f1":
 		m.showHelp = true
+		return m, nil
+
+	case "ctrl+g":
+		m.findBar = findbar.New(m.width)
+		m.findBar.SetContent(m.editor.Content())
+		m.showFindBar = true
+		m.syncEditorDimensions()
+		return m, nil
+
+	case "ctrl+h":
+		m.findBar = findbar.NewReplace(m.width)
+		m.findBar.SetContent(m.editor.Content())
+		m.showFindBar = true
+		m.syncEditorDimensions()
 		return m, nil
 
 	case "f2":
@@ -343,7 +442,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				updatedEditor, _ := m.editor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(suffix)})
 				m.editor = updatedEditor.(*editor.Model)
 				if m.viewMode == layout.ViewModeSplit {
-					m.updatePreviewContent()
+					return m, m.updatePreviewContent()
 				}
 			}
 			return m, nil
@@ -364,7 +463,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.editor = updatedEditor.(*editor.Model)
 
 	if m.viewMode == layout.ViewModeSplit {
-		m.updatePreviewContent()
+		cmd = tea.Batch(cmd, m.updatePreviewContent())
 	}
 
 	if m.viewMode == layout.ViewModeAI {
@@ -400,10 +499,11 @@ func (m *Model) updateFountainPopup() {
 	}
 }
 
-func (m *Model) updatePreviewContent() {
-	if m.viewMode != layout.ViewModeEdit && m.viewMode != layout.ViewModeFocus && m.viewMode != layout.ViewModeAI {
-		m.preview.SetContentImmediate(m.editor.Content())
+func (m *Model) updatePreviewContent() tea.Cmd {
+	if m.viewMode == layout.ViewModeEdit || m.viewMode == layout.ViewModeFocus || m.viewMode == layout.ViewModeAI {
+		return nil
 	}
+	return m.preview.SetContent(m.editor.Content())
 }
 
 func (m *Model) syncEditorDimensions() {
@@ -498,6 +598,9 @@ func (m *Model) editorHeight() int {
 	if m.isFountain {
 		h -= m.fountainPopup.Height()
 	}
+	if m.showFindBar && m.findBar != nil {
+		h -= m.findBar.Height()
+	}
 	return h
 }
 
@@ -513,6 +616,10 @@ func (m *Model) View() string {
 
 	if m.showFileBrowser {
 		return m.fileBrowser.View()
+	}
+
+	if m.showExitConfirm {
+		return m.renderExitConfirm()
 	}
 
 	if m.showHelp {
@@ -541,18 +648,22 @@ func (m *Model) View() string {
 
 	line, col := m.editor.Cursor().LineCol()
 	statusInfo := layout.StatusInfo{
-		Filename: m.editor.Filepath(),
-		Modified: m.editor.Modified(),
-		Line:     line,
-		Col:      col,
-		ViewMode: m.viewMode,
-		Message:  m.message,
+		Filename:  m.editor.Filepath(),
+		Modified:  m.editor.Modified(),
+		Line:      line,
+		Col:       col,
+		WordCount: m.editor.WordCount(),
+		ViewMode:  m.viewMode,
+		Message:   m.message,
 	}
 	statusBar := m.statusBar.Render(statusInfo)
 
 	parts := []string{content}
 	if m.isFountain && m.fountainPopup.Visible() {
 		parts = append(parts, m.fountainPopup.View(m.width))
+	}
+	if m.showFindBar && m.findBar != nil {
+		parts = append(parts, m.findBar.View())
 	}
 	parts = append(parts, statusBar)
 	result := lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -568,7 +679,7 @@ func (m *Model) View() string {
 }
 
 // openFile loads a file into the editor and updates related state.
-func (m *Model) openFile(path string) {
+func (m *Model) openFile(path string) tea.Cmd {
 	m.editor.LoadFile(path)
 	m.isFountain = fountain.IsFountainFile(path)
 	m.fountainPopup = &fountain.Popup{}
@@ -582,7 +693,22 @@ func (m *Model) openFile(path string) {
 		m.viewMode = layout.ViewModeEdit
 	}
 	m.syncEditorDimensions()
-	m.updatePreviewContent()
+	return m.updatePreviewContent()
+}
+
+// glamourStyleFromConfig returns the Glamour style to use for preview rendering.
+// GLAMOUR_STYLE env var overrides the config (useful for CLI/scripting).
+// This must be resolved before the BubbleTea program starts so that goroutines
+// rendering Markdown never call WithAutoStyle(), which queries the terminal and
+// corrupts output when stdin/stdout are owned by BubbleTea.
+func glamourStyleFromConfig(cfg *config.Config) string {
+	if s := os.Getenv("GLAMOUR_STYLE"); s != "" {
+		return s
+	}
+	if cfg.GlamourStyle != "" {
+		return cfg.GlamourStyle
+	}
+	return "dark"
 }
 
 // currentDir returns the directory to start the file browser in.
@@ -618,6 +744,49 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// renderExitConfirm renders the unsaved-changes exit confirmation dialog.
+func (m *Model) renderExitConfirm() string {
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("1")).
+		Padding(1, 4)
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("9"))
+
+	bodyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("15")).
+		MarginTop(1)
+
+	keyStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("3"))
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("8"))
+
+	filename := m.editor.Filepath()
+	if filename == "" {
+		filename = "untitled"
+	} else {
+		filename = filepath.Base(filename)
+	}
+
+	lines := []string{
+		titleStyle.Render("Unsaved changes in " + filename),
+		"",
+		bodyStyle.Render("You have unsaved changes. What would you like to do?"),
+		"",
+		keyStyle.Render("y") + dimStyle.Render("  quit without saving"),
+		keyStyle.Render("Ctrl+S") + dimStyle.Render("  save and quit"),
+		keyStyle.Render("n / Esc") + dimStyle.Render("  go back"),
+	}
+
+	box := borderStyle.Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 // renderHelp renders the keyboard shortcuts overlay.
 func (m *Model) renderHelp() string {
 	borderStyle := lipgloss.NewStyle().
@@ -627,7 +796,10 @@ func (m *Model) renderHelp() string {
 
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("12")).
+		Foreground(lipgloss.Color("12"))
+
+	subtitleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("6")).
 		MarginBottom(1)
 
 	sectionStyle := lipgloss.NewStyle().
@@ -659,6 +831,7 @@ func (m *Model) renderHelp() string {
 			{"Ctrl+Q", "Quit"},
 			{"Ctrl+E", "Export HTML"},
 			{"Ctrl+P", "Export PDF"},
+			{"F1", "Help"},
 		}},
 		{"Edit", []shortcut{
 			{"Ctrl+Z", "Undo"},
@@ -681,6 +854,8 @@ func (m *Model) renderHelp() string {
 			{"Esc", "Exit focus mode"},
 			{"F2", "Settings"},
 			{"F3", "File browser"},
+			{"Ctrl+G", "Find"},
+			{"Ctrl+H", "Find & Replace"},
 		}},
 		{"AI Suggestions", []shortcut{
 			{"Ctrl+R", "Request AI suggestion"},
@@ -690,7 +865,12 @@ func (m *Model) renderHelp() string {
 	}
 
 	var lines []string
-	lines = append(lines, titleStyle.Render("urai  ·  உரை  ·  prose, speech, commentary"))
+	// "ை" (U+0BC8, Tamil vowel sign AI) is a spacing mark that renders as
+	// 1 terminal cell but go-runewidth counts it as 0-width (combining).
+	// The trailing space compensates so lipgloss calculates the correct
+	// content width and the right border aligns with all other lines.
+	lines = append(lines, titleStyle.Render("urai ·  உரை  ·  prose, speech, commentary"))
+	lines = append(lines, subtitleStyle.Render("Blogs · Novels · Fountain screenplays · Markdown docs · Plain text"))
 	lines = append(lines, "")
 
 	for _, sec := range sections {

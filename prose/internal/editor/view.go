@@ -20,6 +20,14 @@ var (
 			Foreground(lipgloss.Color("8")).
 			Width(4).
 			Align(lipgloss.Right)
+
+	matchStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("3")).
+			Foreground(lipgloss.Color("0"))
+
+	currentMatchStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("11")).
+				Foreground(lipgloss.Color("0"))
 )
 
 // View renders the editor.
@@ -45,6 +53,17 @@ func (m *Model) View() string {
 		selEnd = sel.End
 	}
 
+	// Advance through sorted search matches, skipping those that end before
+	// the first visible line so the inner loop starts at the right index.
+	matchIdx := 0
+	if m.searchMatchLen > 0 && len(m.searchMatches) > 0 {
+		visibleStart := m.buffer.LineStart(startLine)
+		for matchIdx < len(m.searchMatches) &&
+			m.searchMatches[matchIdx]+m.searchMatchLen <= visibleStart {
+			matchIdx++
+		}
+	}
+
 	// Render visible lines
 	for lineNum := startLine; lineNum < endLine; lineNum++ {
 		line := ""
@@ -57,28 +76,45 @@ func (m *Model) View() string {
 		sb.WriteString(lineNumStr)
 		sb.WriteString(" ")
 
-		// Line content with cursor and selection
+		// Line content with cursor, selection, and search highlights.
 		lineStart := m.buffer.LineStart(lineNum)
 		runes := []rune(line)
 
 		for col := 0; col <= len(runes); col++ {
 			pos := lineStart + col
 			isCursor := lineNum == cursorLine && col == cursorCol
-
-			// Check if position is in selection
 			inSelection := sel != nil && pos >= selStart && pos < selEnd
+
+			// Advance past matches that end before this position.
+			for matchIdx < len(m.searchMatches) &&
+				m.searchMatches[matchIdx]+m.searchMatchLen <= pos {
+				matchIdx++
+			}
+			inMatch := false
+			isCurrent := false
+			if m.searchMatchLen > 0 && matchIdx < len(m.searchMatches) {
+				mp := m.searchMatches[matchIdx]
+				if pos >= mp && pos < mp+m.searchMatchLen {
+					inMatch = true
+					isCurrent = matchIdx == m.searchCurrentMatch
+				}
+			}
 
 			if col < len(runes) {
 				char := string(runes[col])
-				if isCursor {
+				switch {
+				case isCursor:
 					sb.WriteString(cursorStyle.Render(char))
-				} else if inSelection {
+				case inSelection:
 					sb.WriteString(selectionStyle.Render(char))
-				} else {
+				case isCurrent:
+					sb.WriteString(currentMatchStyle.Render(char))
+				case inMatch:
+					sb.WriteString(matchStyle.Render(char))
+				default:
 					sb.WriteString(char)
 				}
 			} else if isCursor {
-				// Cursor at end of line
 				sb.WriteString(cursorStyle.Render(" "))
 			}
 		}

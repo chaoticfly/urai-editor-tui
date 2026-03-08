@@ -2,6 +2,7 @@ package editor
 
 import (
 	"os"
+	"strings"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +29,15 @@ type Model struct {
 	pageSize     int // Lines visible in viewport
 
 	err error
+
+	// Word count — recomputed lazily only after a modification.
+	wordCount      int
+	wordCountDirty bool
+
+	// Search state set by the find bar; used by the view for highlighting.
+	searchMatches      []int
+	searchMatchLen     int
+	searchCurrentMatch int
 }
 
 // New creates a new editor model.
@@ -43,16 +53,18 @@ func New(filepath string) *Model {
 	cur := buffer.NewCursor(buf)
 
 	return &Model{
-		buffer:    buf,
-		cursor:    cur,
-		selection: buffer.NewSelectionManager(cur),
-		history:   history.NewHistory(),
-		keyMap:    NewKeyMap(DefaultKeyBindings()),
-		filepath:  filepath,
-		modified:  false,
-		width:     80,
-		height:    24,
-		pageSize:  20,
+		buffer:             buf,
+		cursor:             cur,
+		selection:          buffer.NewSelectionManager(cur),
+		history:            history.NewHistory(),
+		keyMap:             NewKeyMap(DefaultKeyBindings()),
+		filepath:           filepath,
+		modified:           false,
+		width:              80,
+		height:             24,
+		pageSize:           20,
+		wordCountDirty:     true,
+		searchCurrentMatch: -1,
 	}
 }
 
@@ -236,6 +248,7 @@ func (m *Model) insertText(text string) {
 		m.history.Execute(cmd)
 	}
 	m.modified = true
+	m.wordCountDirty = true
 	m.ensureCursorVisible()
 }
 
@@ -249,6 +262,7 @@ func (m *Model) deleteBackward() {
 		m.history.Execute(cmd)
 	}
 	m.modified = true
+	m.wordCountDirty = true
 }
 
 func (m *Model) deleteForward() {
@@ -261,6 +275,7 @@ func (m *Model) deleteForward() {
 		m.history.Execute(cmd)
 	}
 	m.modified = true
+	m.wordCountDirty = true
 }
 
 func (m *Model) cut() {
@@ -386,8 +401,51 @@ func (m *Model) LoadFile(path string) {
 	m.selection = buffer.NewSelectionManager(m.cursor)
 	m.history = history.NewHistory()
 	m.modified = false
+	m.wordCountDirty = true
 	m.err = nil
 	m.scrollOffset = 0
+	m.ClearSearchState()
+}
+
+// WordCount returns the current word count, recomputing only when the buffer
+// has changed since the last call.
+func (m *Model) WordCount() int {
+	if m.wordCountDirty {
+		m.wordCount = len(strings.Fields(m.buffer.String()))
+		m.wordCountDirty = false
+	}
+	return m.wordCount
+}
+
+// SetSearchState informs the view which buffer positions to highlight as
+// search matches. matches is a sorted slice of rune positions; current is
+// the index of the active match (-1 for none).
+func (m *Model) SetSearchState(matches []int, matchLen, current int) {
+	m.searchMatches = matches
+	m.searchMatchLen = matchLen
+	m.searchCurrentMatch = current
+}
+
+// ClearSearchState removes all search highlights.
+func (m *Model) ClearSearchState() {
+	m.searchMatches = nil
+	m.searchMatchLen = 0
+	m.searchCurrentMatch = -1
+}
+
+// JumpToPosition moves the cursor to the given buffer position and scrolls
+// the viewport so it is visible.
+func (m *Model) JumpToPosition(pos int) {
+	m.cursor.SetPosition(pos)
+	m.ensureCursorVisible()
+}
+
+// ReplaceAt replaces matchLen runes at pos with text, using the undo history.
+func (m *Model) ReplaceAt(pos, matchLen int, text string) {
+	cmd := history.NewReplaceCommand(m.buffer, m.cursor, pos, matchLen, text)
+	m.history.Execute(cmd)
+	m.modified = true
+	m.wordCountDirty = true
 }
 
 // Save writes the current buffer to disk and returns any error.
