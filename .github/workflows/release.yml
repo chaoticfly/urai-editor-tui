@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: urai-linux-amd64.tar.gz
+          - goos: linux
+            goarch: arm64
+            asset: urai-linux-arm64.tar.gz
+          - goos: darwin
+            goarch: arm64
+            asset: urai-darwin-arm64.tar.gz
+          - goos: windows
+            goarch: amd64
+            asset: urai-windows-amd64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: prose/go.mod
+
+      - name: Build
+        working-directory: prose
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN=urai
+          [ "${{ matrix.goos }}" = "windows" ] && BIN=urai.exe
+          go build -ldflags "-s -w -X main.version=${VERSION}" -o "../dist/${BIN}" ./cmd/urai/
+
+      - name: Package (tar.gz)
+        if: matrix.goos != 'windows'
+        run: tar -czf "${{ matrix.asset }}" -C dist urai README.md LICENSE
+
+      - name: Package (zip)
+        if: matrix.goos == 'windows'
+        run: zip "${{ matrix.asset }}" dist/urai.exe README.md LICENSE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: sha256sum urai-*.tar.gz urai-*.zip > checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            urai-linux-amd64.tar.gz
+            urai-linux-arm64.tar.gz
+            urai-darwin-arm64.tar.gz
+            urai-windows-amd64.zip
+            checksums.txt
