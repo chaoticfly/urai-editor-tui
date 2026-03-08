@@ -865,11 +865,7 @@ func (m *Model) renderHelp() string {
 	}
 
 	var lines []string
-	// "ை" (U+0BC8, Tamil vowel sign AI) is a spacing mark that renders as
-	// 1 terminal cell but go-runewidth counts it as 0-width (combining).
-	// The trailing space compensates so lipgloss calculates the correct
-	// content width and the right border aligns with all other lines.
-	lines = append(lines, titleStyle.Render("urai ·  உரை  ·  prose, speech, commentary"))
+	lines = append(lines, titleStyle.Render("urai — prose, speech, commentary"))
 	lines = append(lines, subtitleStyle.Render("Blogs · Novels · Fountain screenplays · Markdown docs · Plain text"))
 	lines = append(lines, "")
 
