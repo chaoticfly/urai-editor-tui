@@ -43,13 +43,13 @@ file management — all from the keyboard.
 ### Linux / macOS (ARM)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/master/install.sh | bash
 ```
 
 or with wget:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/master/install.sh | bash
 ```
 
 Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`.
@@ -57,7 +57,7 @@ Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`.
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/master/install.ps1 | iex
 ```
 
 Installs to `%LOCALAPPDATA%\Programs\urai` and adds it to your user PATH automatically.
@@ -65,8 +65,8 @@ Installs to `%LOCALAPPDATA%\Programs\urai` and adds it to your user PATH automat
 ### Specific version
 
 ```bash
-curl -fsSL .../install.sh | VERSION=v0.2.0 bash   # Linux / macOS
-$env:VERSION = "v0.2.0"; irm .../install.ps1 | iex # Windows
+curl -fsSL .../install.sh | VERSION=v1.0.2 bash                    # Linux / macOS
+$env:VERSION = "v1.0.2"; irm .../install.ps1 | iex                 # Windows
 ```
 
 ---
@@ -74,7 +74,7 @@ $env:VERSION = "v0.2.0"; irm .../install.ps1 | iex # Windows
 ## Building from source
 
 ```bash
-git clone https://github.com/OWNER/urai.git
+git clone https://github.com/chaoticfly/urai-editor-tui.git
 cd urai/prose
 go build -o urai ./cmd/urai/
 ./urai
