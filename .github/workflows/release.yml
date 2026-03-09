@@ -79,11 +79,15 @@ jobs:
 
       - name: Package (tar.gz)
         if: matrix.goos != 'windows'
-        run: tar -czf "${{ matrix.asset }}" -C dist urai README.md LICENSE
+        run: |
+          cp README.md LICENSE dist/
+          tar -czf "${{ matrix.asset }}" -C dist urai README.md LICENSE
 
       - name: Package (zip)
         if: matrix.goos == 'windows'
-        run: zip "${{ matrix.asset }}" dist/urai.exe README.md LICENSE
+        run: |
+          cp README.md LICENSE dist/
+          zip "${{ matrix.asset }}" dist/urai.exe dist/README.md dist/LICENSE
 
       - uses: actions/upload-artifact@v4
         with:
