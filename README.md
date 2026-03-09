@@ -43,13 +43,13 @@ file management — all from the keyboard.
 ### Linux / macOS (ARM)
 
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/OWNER/urai/master/install.sh](https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.sh) | bash
+curl -fsSL https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.sh | bash
 ```
 
 or with wget:
 
 ```bash
-wget -qO- [https://raw.githubusercontent.com/OWNER/urai/master/install.sh](https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.sh) | bash
+wget -qO- https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.sh | bash
 ```
 
 Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`.
@@ -57,7 +57,7 @@ Installs to `/usr/local/bin` if writable, otherwise `~/.local/bin`.
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/OWNER/urai/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/chaoticfly/urai-editor-tui/refs/heads/master/install.ps1 | iex
 ```
 
 Installs to `%LOCALAPPDATA%\Programs\urai` and adds it to your user PATH automatically.
