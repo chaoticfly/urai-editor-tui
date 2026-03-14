@@ -64,43 +64,75 @@ func (m *Model) View() string {
 		}
 	}
 
-	// Render visible lines
-	for lineNum := startLine; lineNum < endLine; lineNum++ {
+	// contentWidth is the number of visible characters per visual row
+	// (total width minus line-number prefix: 4 chars + 1 space).
+	contentWidth := m.width - 5
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+
+	// Render buffer lines, wrapping long lines into multiple visual rows.
+	// Stop when we've filled pageSize visual rows.
+	visualRow := 0
+	for lineNum := startLine; lineNum < len(lines) && visualRow < m.pageSize; lineNum++ {
 		line := ""
 		if lineNum < len(lines) {
 			line = lines[lineNum]
 		}
 
-		// Line number
-		lineNumStr := lineNumberStyle.Render(fmt.Sprintf("%d", lineNum+1))
-		sb.WriteString(lineNumStr)
-		sb.WriteString(" ")
-
-		// Line content with cursor, selection, and search highlights.
 		lineStart := m.buffer.LineStart(lineNum)
 		runes := []rune(line)
 
-		for col := 0; col <= len(runes); col++ {
-			pos := lineStart + col
-			isCursor := lineNum == cursorLine && col == cursorCol
-			inSelection := sel != nil && pos >= selStart && pos < selEnd
+		// Number of visual chunks this buffer line needs.
+		numChunks := (len(runes) + contentWidth - 1) / contentWidth
+		if numChunks == 0 {
+			numChunks = 1 // empty line still occupies one visual row
+		}
 
-			// Advance past matches that end before this position.
-			for matchIdx < len(m.searchMatches) &&
-				m.searchMatches[matchIdx]+m.searchMatchLen <= pos {
-				matchIdx++
+		for chunkIdx := 0; chunkIdx < numChunks && visualRow < m.pageSize; chunkIdx++ {
+			colStart := chunkIdx * contentWidth
+			colEnd := colStart + contentWidth
+			if colEnd > len(runes) {
+				colEnd = len(runes)
 			}
-			inMatch := false
-			isCurrent := false
-			if m.searchMatchLen > 0 && matchIdx < len(m.searchMatches) {
-				mp := m.searchMatches[matchIdx]
-				if pos >= mp && pos < mp+m.searchMatchLen {
-					inMatch = true
-					isCurrent = matchIdx == m.searchCurrentMatch
+
+			// Line number prefix: show number on first chunk, indent on continuations.
+			if chunkIdx == 0 {
+				sb.WriteString(lineNumberStyle.Render(fmt.Sprintf("%d", lineNum+1)))
+			} else {
+				sb.WriteString(lineNumberStyle.Render("↪"))
+			}
+			sb.WriteString(" ")
+
+			// Render characters for this chunk.
+			for col := colStart; col <= colEnd; col++ {
+				pos := lineStart + col
+				isCursor := lineNum == cursorLine && col == cursorCol
+
+				if col == colEnd {
+					// Past the last char of this chunk — only draw cursor if it's here.
+					if isCursor {
+						sb.WriteString(cursorStyle.Render(" "))
+					}
+					break
 				}
-			}
 
-			if col < len(runes) {
+				inSelection := sel != nil && pos >= selStart && pos < selEnd
+
+				for matchIdx < len(m.searchMatches) &&
+					m.searchMatches[matchIdx]+m.searchMatchLen <= pos {
+					matchIdx++
+				}
+				inMatch := false
+				isCurrent := false
+				if m.searchMatchLen > 0 && matchIdx < len(m.searchMatches) {
+					mp := m.searchMatches[matchIdx]
+					if pos >= mp && pos < mp+m.searchMatchLen {
+						inMatch = true
+						isCurrent = matchIdx == m.searchCurrentMatch
+					}
+				}
+
 				char := string(runes[col])
 				switch {
 				case isCursor:
@@ -114,19 +146,18 @@ func (m *Model) View() string {
 				default:
 					sb.WriteString(char)
 				}
-			} else if isCursor {
-				sb.WriteString(cursorStyle.Render(" "))
 			}
-		}
 
-		sb.WriteString("\n")
+			sb.WriteString("\n")
+			visualRow++
+		}
 	}
 
-	// Pad remaining lines
-	for lineNum := endLine; lineNum < startLine+m.pageSize; lineNum++ {
-		lineNumStr := lineNumberStyle.Render("~")
-		sb.WriteString(lineNumStr)
+	// Pad remaining visual rows with tilde markers.
+	for visualRow < m.pageSize {
+		sb.WriteString(lineNumberStyle.Render("~"))
 		sb.WriteString("\n")
+		visualRow++
 	}
 
 	return sb.String()

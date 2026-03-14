@@ -237,6 +237,24 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// DirectInsert inserts text at the current cursor position, handling newlines
+// correctly. Use this instead of sending a KeyRunes message for programmatic inserts.
+func (m *Model) DirectInsert(text string) {
+	m.insertText(text)
+}
+
+// AppendText moves the cursor to the end of the document and inserts text,
+// adding a newline separator if the document doesn't already end with one.
+func (m *Model) AppendText(text string) {
+	m.cursor.SetPosition(m.buffer.Length())
+	content := m.buffer.String()
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		text = "\n" + text
+	}
+	m.insertText(text)
+	m.ensureCursorVisible()
+}
+
 func (m *Model) insertText(text string) {
 	// If there's a selection, delete it first
 	if sel := m.selection.GetSelection(); sel != nil {
@@ -384,6 +402,24 @@ func (m *Model) Error() error {
 
 func (m *Model) Content() string {
 	return m.buffer.String()
+}
+
+// LoadRecovery replaces the editor content with recovered text while keeping
+// the given filepath association and marking the buffer as modified.
+// Call this after a crash-recovery file is detected.
+func (m *Model) LoadRecovery(path, content string) {
+	m.filepath = path
+	m.buffer = buffer.NewGapBuffer(content)
+	m.cursor = buffer.NewCursor(m.buffer)
+	m.selection = buffer.NewSelectionManager(m.cursor)
+	m.history = history.NewHistory()
+	m.modified = true
+	m.wordCountDirty = true
+	m.err = nil
+	m.scrollOffset = 0
+	m.ClearSearchState()
+	m.cursor.SetPosition(m.buffer.Length())
+	m.ensureCursorVisible()
 }
 
 // LoadFile replaces the editor content with the contents of path.

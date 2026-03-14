@@ -44,7 +44,7 @@ func New(baseURL, apiKey, model string) *Client {
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   model,
-		Timeout: 30 * time.Second,
+		Timeout: 120 * time.Second,
 	}
 }
 

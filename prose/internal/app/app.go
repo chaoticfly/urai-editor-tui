@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -17,9 +18,27 @@ import (
 	"urai/internal/fountain"
 	"urai/internal/layout"
 	"urai/internal/preview"
+	"urai/internal/recovery"
+	"urai/internal/session"
 	"urai/internal/settings"
 	"urai/internal/suggestions"
 )
+
+// recoveryTickMsg fires periodically to write the crash-recovery file.
+type recoveryTickMsg struct{}
+
+// autoSaveMsg fires periodically to auto-save when auto-save is enabled.
+type autoSaveMsg struct{}
+
+const recoveryInterval = 30 * time.Second
+
+func tickRecovery() tea.Cmd {
+	return tea.Tick(recoveryInterval, func(time.Time) tea.Msg { return recoveryTickMsg{} })
+}
+
+func tickAutoSave(delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(time.Time) tea.Msg { return autoSaveMsg{} })
+}
 
 // Model is the root application model.
 type Model struct {
@@ -57,6 +76,23 @@ func New(fp string, cfg *config.Config) *Model {
 	}
 
 	ed := editor.New(fp)
+
+	// If a crash-recovery file is newer than the saved file, load it instead
+	// and mark the buffer as modified so the user is prompted to save.
+	startMsg := ""
+	if recovery.Exists(fp) {
+		if content, err := recovery.Read(fp); err == nil {
+			ed.LoadRecovery(fp, content)
+			name := fp
+			if name == "" {
+				name = "untitled"
+			} else {
+				name = filepath.Base(name)
+			}
+			startMsg = fmt.Sprintf("%s  [recovery loaded — Ctrl+S to save, Ctrl+Z to discard]", name)
+		}
+	}
+
 	prev := preview.New(80, 24, glamourStyleFromConfig(cfg))
 	split := layout.NewSplitLayout(80, 24)
 	status := layout.NewStatusBar(80)
@@ -80,9 +116,10 @@ func New(fp string, cfg *config.Config) *Model {
 		config:        cfg,
 		width:         80,
 		height:        24,
-		showHelp:      true,
+		showHelp:      startMsg == "", // skip help overlay if showing recovery notice
 		isFountain:    fountain.IsFountainFile(fp),
 		fountainPopup: &fountain.Popup{},
+		message:       startMsg,
 	}
 
 	if initialMode == layout.ViewModeSplit {
@@ -94,10 +131,15 @@ func New(fp string, cfg *config.Config) *Model {
 
 // Init initializes the application.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.editor.Init(),
 		tea.EnterAltScreen,
-	)
+		tickRecovery(),
+	}
+	if m.config.AutoSave && m.config.AutoSaveDelay > 0 {
+		cmds = append(cmds, tickAutoSave(time.Duration(m.config.AutoSaveDelay)*time.Millisecond))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles messages.
@@ -133,12 +175,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Error != nil {
 			m.message = fmt.Sprintf("AI error: %v", msg.Error)
 		} else {
-			m.message = "AI suggestion ready — Ctrl+L to insert"
+			m.message = "AI suggestion ready — Enter or Ctrl+L to insert"
 		}
 		return m, nil
 
 	case suggestions.InsertMsg:
-		m.editor.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(msg.Text)})
+		m.editor.AppendText(msg.Text)
 		m.message = "Suggestion inserted"
 		return m, nil
 
@@ -171,6 +213,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err := m.editor.Save(); err != nil {
 			m.message = fmt.Sprintf("Save error: %v", err)
 		} else {
+			recovery.Clean(msg.Path)
+			session.Save(msg.Path) //nolint:errcheck
 			m.message = fmt.Sprintf("Saved: %s", filepath.Base(msg.Path))
 			m.isFountain = fountain.IsFountainFile(msg.Path)
 		}
@@ -214,6 +258,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.SetSearchState(m.findBar.Matches(), m.findBar.MatchLen(), m.findBar.CurrentMatch())
 		m.message = fmt.Sprintf("Replaced %d occurrence(s)", len(msg.Matches))
 		return m, nil
+
+	case recoveryTickMsg:
+		if m.editor.Modified() {
+			recovery.Write(m.editor.Filepath(), m.editor.Content()) //nolint:errcheck
+		}
+		return m, tickRecovery()
+
+	case autoSaveMsg:
+		var next tea.Cmd
+		if m.config.AutoSave && m.config.AutoSaveDelay > 0 {
+			next = tickAutoSave(time.Duration(m.config.AutoSaveDelay) * time.Millisecond)
+		}
+		if m.config.AutoSave && m.editor.Modified() && m.editor.Filepath() != "" {
+			if err := m.editor.Save(); err != nil {
+				m.message = fmt.Sprintf("Auto-save failed: %v", err)
+			} else {
+				recovery.Clean(m.editor.Filepath())
+			}
+		}
+		return m, next
 	}
 
 	return m, nil
@@ -226,6 +290,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.showExitConfirm {
 		switch key {
 		case "y", "Y":
+			// Discard — keep recovery file so user can retrieve later
+			session.Save(m.editor.Filepath()) //nolint:errcheck
 			m.quitting = true
 			return m, tea.Quit
 		case "ctrl+s":
@@ -239,6 +305,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.message = fmt.Sprintf("Save failed: %v", err)
 				return m, nil
 			}
+			recovery.Clean(m.editor.Filepath())
+			session.Save(m.editor.Filepath()) //nolint:errcheck
 			m.quitting = true
 			return m, tea.Quit
 		default:
@@ -295,6 +363,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showExitConfirm = true
 			return m, nil
 		}
+		recovery.Clean(m.editor.Filepath())
+		session.Save(m.editor.Filepath()) //nolint:errcheck
 		m.quitting = true
 		return m, tea.Quit
 
@@ -335,6 +405,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.editor.Error() != nil {
 			m.message = fmt.Sprintf("Error: %v", m.editor.Error())
 		} else {
+			recovery.Clean(m.editor.Filepath())
+			session.Save(m.editor.Filepath()) //nolint:errcheck
 			m.message = "Saved"
 		}
 		return m, nil
@@ -420,7 +492,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// AI panel: scroll suggestion text, rest goes to editor
+	// AI panel: scroll suggestion text, Enter inserts, rest goes to editor
 	if m.viewMode == layout.ViewModeAI {
 		switch key {
 		case "up", "k":
@@ -429,6 +501,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			m.aiPanel.ScrollDown()
 			return m, nil
+		case "enter":
+			cmd := m.aiPanel.InsertSuggestion()
+			if cmd == nil {
+				m.message = "No suggestion available — press Ctrl+R first"
+			}
+			return m, cmd
 		}
 	}
 
@@ -592,7 +670,13 @@ func (m *Model) aiPanelWidth() int {
 
 func (m *Model) editorHeight() int {
 	if m.viewMode == layout.ViewModeFocus {
-		return m.height
+		// No status bar in focus mode so the full terminal height is usable.
+		// ViewFocus always appends a trailing '\n' on its last line, which
+		// creates one extra visual item when lipgloss splits the string;
+		// that item acts as the bottom blank row.  To fill the terminal
+		// exactly we therefore want pageSize = m.height - 1, and since the
+		// editor derives pageSize as (height - 2) we pass m.height + 1.
+		return m.height + 1
 	}
 	h := m.height - 1 // status bar
 	if m.isFountain {
@@ -642,7 +726,7 @@ func (m *Model) View() string {
 		content = m.layout.Render(m.editor.View(), m.aiPanel.View())
 
 	case layout.ViewModeFocus:
-		content = m.layout.RenderFocus(m.editor.ViewFocus(), m.focusWidth(), m.editorHeight())
+		content = m.layout.RenderFocus(m.editor.ViewFocus(), m.focusWidth(), m.height)
 		return content
 	}
 
@@ -683,7 +767,18 @@ func (m *Model) openFile(path string) tea.Cmd {
 	m.editor.LoadFile(path)
 	m.isFountain = fountain.IsFountainFile(path)
 	m.fountainPopup = &fountain.Popup{}
-	m.message = fmt.Sprintf("Opened: %s", filepath.Base(path))
+
+	// Restore from crash-recovery file if one is newer than the saved file.
+	if recovery.Exists(path) {
+		if content, err := recovery.Read(path); err == nil {
+			m.editor.LoadRecovery(path, content)
+			m.message = fmt.Sprintf("Opened: %s  [recovery loaded — Ctrl+S to save, Ctrl+Z to discard]", filepath.Base(path))
+		} else {
+			m.message = fmt.Sprintf("Opened: %s", filepath.Base(path))
+		}
+	} else {
+		m.message = fmt.Sprintf("Opened: %s", filepath.Base(path))
+	}
 
 	// Auto-switch view mode based on file type
 	ext := strings.ToLower(filepath.Ext(path))
@@ -710,6 +805,12 @@ func glamourStyleFromConfig(cfg *config.Config) string {
 	}
 	return "dark"
 }
+
+// Filepath returns the path of the currently open file (may be empty).
+func (m *Model) Filepath() string { return m.editor.Filepath() }
+
+// Content returns the current editor buffer content.
+func (m *Model) Content() string { return m.editor.Content() }
 
 // currentDir returns the directory to start the file browser in.
 func currentDir(editorPath string) string {

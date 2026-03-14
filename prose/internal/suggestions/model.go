@@ -10,12 +10,12 @@ import (
 	"urai/internal/config"
 )
 
-// Mode controls whether suggestions are based on the current line or paragraph.
+// Mode controls whether suggestions are based on the current paragraph or full page.
 type Mode int
 
 const (
-	ModeLine Mode = iota
-	ModeParagraph
+	ModeParagraph Mode = iota
+	ModePage
 )
 
 // SuggestionMsg carries an AI response or error back to the app.
@@ -46,7 +46,7 @@ type Model struct {
 func New(cfg config.AIConfig, width, height int) *Model {
 	return &Model{
 		aiConfig: cfg,
-		mode:     ModeLine,
+		mode:     ModeParagraph,
 		width:    width,
 		height:   height,
 	}
@@ -66,12 +66,10 @@ func (m *Model) UpdateConfig(cfg config.AIConfig) {
 // SetEditorContext extracts and stores the context (line or paragraph) based
 // on the current cursor position in the editor content.
 func (m *Model) SetEditorContext(content string, cursorLine int) {
-	lines := strings.Split(content, "\n")
-	if m.mode == ModeLine {
-		if cursorLine >= 0 && cursorLine < len(lines) {
-			m.context = lines[cursorLine]
-		}
+	if m.mode == ModePage {
+		m.context = content
 	} else {
+		lines := strings.Split(content, "\n")
 		m.context = extractParagraph(lines, cursorLine)
 	}
 }
@@ -98,10 +96,10 @@ func extractParagraph(lines []string, cursorLine int) string {
 
 // ToggleMode switches between line and paragraph mode.
 func (m *Model) ToggleMode() {
-	if m.mode == ModeLine {
-		m.mode = ModeParagraph
+	if m.mode == ModeParagraph {
+		m.mode = ModePage
 	} else {
-		m.mode = ModeLine
+		m.mode = ModeParagraph
 	}
 	m.suggestion = ""
 	m.errMsg = ""
@@ -112,7 +110,11 @@ func (m *Model) RequestSuggestion() tea.Cmd {
 	if m.loading {
 		return nil
 	}
-	if m.aiConfig.BaseURL == "" && m.aiConfig.Provider != "openai" {
+	if m.aiConfig.Provider == "openai" && m.aiConfig.APIKey == "" {
+		m.errMsg = "No OpenAI API key configured. Open Settings (F2) to configure."
+		return nil
+	}
+	if m.aiConfig.Provider != "openai" && m.aiConfig.BaseURL == "" {
 		m.errMsg = "No API URL configured. Open Settings (F2) to configure."
 		return nil
 	}
@@ -128,7 +130,8 @@ func (m *Model) RequestSuggestion() tea.Cmd {
 	cfg := m.aiConfig
 	return func() tea.Msg {
 		client := ai.New(cfg.BaseURL, cfg.APIKey, cfg.Model)
-		result, err := client.Complete(cfg.SystemPrompt, ctx)
+		userMsg := "Continue the following text. Output only the continuation text itself — no commentary, no bullet points, no explanations, no suggestions about the writing. Just write the next part:\n\n" + ctx
+		result, err := client.Complete(cfg.SystemPrompt, userMsg)
 		return SuggestionMsg{Text: result, Error: err}
 	}
 }
@@ -206,10 +209,10 @@ func (m *Model) View() string {
 	}
 
 	var modeStr string
-	if m.mode == ModeLine {
-		modeStr = activeStyle.Render("Line") + " " + inactiveStyle.Render("Paragraph")
+	if m.mode == ModeParagraph {
+		modeStr = activeStyle.Render("Paragraph") + " " + inactiveStyle.Render("Page")
 	} else {
-		modeStr = inactiveStyle.Render("Line") + " " + activeStyle.Render("Paragraph")
+		modeStr = inactiveStyle.Render("Paragraph") + " " + activeStyle.Render("Page")
 	}
 
 	var lines []string
@@ -273,7 +276,7 @@ func (m *Model) View() string {
 	if len(lines) >= m.height {
 		lines = lines[:m.height-1]
 	}
-	lines = append(lines, hintStyle.Render("Ctrl+R: suggest  Ctrl+L: insert  F4: mode"))
+	lines = append(lines, hintStyle.Render("Ctrl+R: suggest  Enter/Ctrl+L: insert  F4: mode"))
 
 	return strings.Join(lines, "\n")
 }
