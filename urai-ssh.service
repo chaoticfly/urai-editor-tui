@@ -1,0 +1,14 @@
+[Unit]
+Description=urai SSH editor server
+After=network.target
+
+[Service]
+Type=simple
+# Run as your normal Pi user so it has access to your home dir / config
+User=%i
+ExecStart=/usr/local/bin/urai-ssh --addr 0.0.0.0:2222
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

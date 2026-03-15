@@ -12,11 +12,18 @@ PLATFORMS := \
 	darwin/arm64 \
 	windows/amd64
 
-.PHONY: build run install release clean tidy
+SSH_BINARY := urai-ssh
+SSH_CMD    := ./cmd/urai-ssh
+
+.PHONY: build build-ssh run install release clean tidy
 
 # Build for the current platform into the root directory
 build:
 	cd $(SRC_DIR) && go build $(LDFLAGS) -o $(CURDIR)/$(BINARY) $(CMD)
+
+# Build the SSH server binary (cross-compile for Pi with: make build-ssh GOOS=linux GOARCH=arm64)
+build-ssh:
+	cd $(SRC_DIR) && go build $(LDFLAGS) -o $(CURDIR)/$(SSH_BINARY) $(SSH_CMD)
 
 run: build
 	$(CURDIR)/$(BINARY)
