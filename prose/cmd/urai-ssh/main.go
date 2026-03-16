@@ -15,12 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"net"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
-	"net"
 
 	gossh "golang.org/x/crypto/ssh"
 
@@ -29,7 +30,7 @@ import (
 	"urai/internal/recovery"
 )
 
-const version = "1.0.5"
+const version = "1.0.6"
 
 func main() {
 	var (
