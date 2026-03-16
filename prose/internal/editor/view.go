@@ -8,9 +8,7 @@ import (
 )
 
 var (
-	cursorStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("7")).
-			Foreground(lipgloss.Color("0"))
+	cursorStyle = lipgloss.NewStyle().Reverse(true)
 
 	selectionStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("4")).
