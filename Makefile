@@ -2,7 +2,7 @@ BINARY  := urai
 CMD     := ./cmd/urai
 SRC_DIR := $(CURDIR)/prose
 BIN_DIR := $(CURDIR)/bin
-VERSION := 0.1.0
+VERSION := 1.0.5
 LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION)"
 
 PLATFORMS := \

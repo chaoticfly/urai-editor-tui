@@ -35,9 +35,9 @@ jobs:
             echo "New version ${TAG} detected — releasing."
           fi
 
-  # ── Build all platforms ──────────────────────────────────────────────────────
+  # ── Build urai (editor) for all platforms ───────────────────────────────────
   build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    name: Build urai ${{ matrix.goos }}/${{ matrix.goarch }}
     needs: check
     if: needs.check.outputs.skip == 'false'
     runs-on: ubuntu-latest
@@ -94,10 +94,42 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
 
+  # ── Build urai-ssh server (linux/arm64 only — targets Raspberry Pi) ─────────
+  build-ssh:
+    name: Build urai-ssh linux/arm64
+    needs: check
+    if: needs.check.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: prose/go.mod
+
+      - name: Build urai-ssh
+        working-directory: prose
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          VERSION="${{ needs.check.outputs.version }}"
+          VERSION="${VERSION#v}"
+          go build -ldflags "-s -w -X main.version=${VERSION}" -o "../dist/urai-ssh" ./cmd/urai-ssh/
+
+      - name: Package
+        run: tar -czf urai-ssh-linux-arm64.tar.gz -C dist urai-ssh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: urai-ssh-linux-arm64.tar.gz
+          path: urai-ssh-linux-arm64.tar.gz
+
   # ── Tag, publish release, attach binaries ───────────────────────────────────
   release:
     name: Tag and publish
-    needs: [check, build]
+    needs: [check, build, build-ssh]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +139,7 @@ jobs:
           merge-multiple: true
 
       - name: Generate checksums
-        run: sha256sum urai-*.tar.gz urai-*.zip > checksums.txt
+        run: sha256sum urai-*.tar.gz urai-*.zip urai-ssh-*.tar.gz > checksums.txt
 
       - name: Create and push tag
         run: |
@@ -125,4 +157,6 @@ jobs:
             urai-linux-arm64.tar.gz
             urai-darwin-arm64.tar.gz
             urai-windows-amd64.zip
+            urai-ssh-linux-arm64.tar.gz
+            install-server.sh
             checksums.txt
