@@ -37,6 +37,7 @@ type entry struct {
 
 // Model is the file browser state.
 type Model struct {
+	rootDir    string // navigation cannot go above this directory
 	currentDir string
 	entries    []entry
 	selected   int
@@ -49,12 +50,24 @@ type Model struct {
 	errMsg     string
 }
 
-// New creates a file browser starting in startDir (falls back to cwd).
+// homeDir returns the user's home directory, falling back to cwd.
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil {
+		return h
+	}
+	d, _ := os.Getwd()
+	return d
+}
+
+// New creates a file browser rooted at the user's home directory.
+// startDir is the initial directory shown; it is clamped to be inside home.
 func New(startDir string, width, height int) *Model {
-	if startDir == "" {
-		startDir, _ = os.Getwd()
+	root := homeDir()
+	if startDir == "" || !strings.HasPrefix(filepath.Clean(startDir), filepath.Clean(root)) {
+		startDir = root
 	}
 	m := &Model{
+		rootDir:    root,
 		currentDir: startDir,
 		width:      width,
 		height:     height,
@@ -90,7 +103,10 @@ func (m *Model) loadDir() {
 		}
 		return strings.ToLower(des[i].Name()) < strings.ToLower(des[j].Name())
 	})
-	m.entries = []entry{{name: "..", isDir: true}}
+	// Only show ".." if we haven't reached the root boundary.
+	if filepath.Clean(m.currentDir) != filepath.Clean(m.rootDir) {
+		m.entries = []entry{{name: "..", isDir: true}}
+	}
 	for _, de := range des {
 		m.entries = append(m.entries, entry{name: de.Name(), isDir: de.IsDir()})
 	}
@@ -286,7 +302,8 @@ func (m *Model) handleInputKey(key string, msg tea.KeyMsg, onConfirm func(string
 func (m *Model) enterDir(name string) {
 	if name == ".." {
 		parent := filepath.Dir(m.currentDir)
-		if parent != m.currentDir {
+		root := filepath.Clean(m.rootDir)
+		if parent != m.currentDir && strings.HasPrefix(filepath.Clean(parent), root) {
 			m.currentDir = parent
 		}
 	} else {

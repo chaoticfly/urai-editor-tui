@@ -13,7 +13,7 @@ import (
 	"urai/internal/session"
 )
 
-const version = "1.0.7"
+const version = "1.0.8"
 
 func main() {
 	var (
