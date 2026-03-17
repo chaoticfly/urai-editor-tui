@@ -7,8 +7,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// cursorOn/cursorOff emit raw ANSI reverse-video, bypassing lipgloss colour
+// detection. This is necessary when the process stdout is not a TTY (e.g. a
+// systemd service) — in that case lipgloss strips every attribute, making the
+// cursor invisible. Raw escape codes reach the SSH terminal unconditionally.
+const (
+	cursorOn  = "\x1b[7m"  // reverse video on
+	cursorOff = "\x1b[27m" // reverse video off
+)
+
 var (
-	cursorStyle = lipgloss.NewStyle().Reverse(true)
 
 	selectionStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("4")).
@@ -110,7 +118,7 @@ func (m *Model) View() string {
 				if col == colEnd {
 					// Past the last char of this chunk — only draw cursor if it's here.
 					if isCursor {
-						sb.WriteString(cursorStyle.Render(" "))
+						sb.WriteString(cursorOn + " " + cursorOff)
 					}
 					break
 				}
@@ -134,7 +142,7 @@ func (m *Model) View() string {
 				char := string(runes[col])
 				switch {
 				case isCursor:
-					sb.WriteString(cursorStyle.Render(char))
+					sb.WriteString(cursorOn + char + cursorOff)
 				case inSelection:
 					sb.WriteString(selectionStyle.Render(char))
 				case isCurrent:
@@ -197,14 +205,14 @@ func (m *Model) ViewFocus() string {
 			if col < len(runes) {
 				char := string(runes[col])
 				if isCursor {
-					sb.WriteString(cursorStyle.Render(char))
+					sb.WriteString(cursorOn + char + cursorOff)
 				} else if inSelection {
 					sb.WriteString(selectionStyle.Render(char))
 				} else {
 					sb.WriteString(char)
 				}
 			} else if isCursor {
-				sb.WriteString(cursorStyle.Render(" "))
+				sb.WriteString(cursorOn + " " + cursorOff)
 			}
 		}
 
